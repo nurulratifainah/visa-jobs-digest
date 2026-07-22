@@ -1,69 +1,84 @@
-# Visa Jobs Digest 🛂💼
+# Visa Jobs — Semantic Search Engine 🛂🔍
 
-An autonomous agent built with the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/quickstart) that scans job boards for tech roles offering **visa sponsorship or relocation assistance**, verifies each posting by reading it, and writes a curated markdown digest — twice a week, hands-free.
-
-Inspired by hand-curated newsletters like relocate.me's weekly digest, but fully automated and tailored to your own profile.
-
-## How it works
+An event-driven **semantic job search engine** for visa-friendly tech jobs, plus an autonomous [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/quickstart) digest agent. One `docker compose up` runs the whole thing.
 
 ```
-jobs.config.json ──▶ prompt ──▶ Claude Agent SDK (query)
-                                   │  WebSearch: scan job boards
-                                   │  WebFetch:  open each posting & verify
-                                   ▼
-                            digests/YYYY-MM-DD.md
+                    ┌─────────────────────────────────────────────────────┐
+                    │                   docker compose                     │
+                    │                                                      │
+ arbeitnow API ───▶ │  ingester ──── new job rows ────▶ Postgres+pgvector  │
+                    │      │                                ▲    ▲         │
+                    │      │ "job.created" event            │    │         │
+                    │      ▼                                │    │         │
+                    │  SQS queue (ElasticMQ) ──▶ indexer ───┘    │         │
+                    │                     embeds w/ MiniLM       │         │
+                    │                                            │         │
+ browser ◀────────▶ │  React UI ◀── api (hybrid BM25+KNN, RRF) ──┘         │
+                    └─────────────────────────────────────────────────────┘
+
+ (separate) GitHub Actions cron ──▶ digest agent (Claude Agent SDK) ──▶ digests/*.md
 ```
 
-1. `jobs.config.json` describes who you are (target roles, stacks, destinations) and which boards to scan.
-2. `src/index.ts` builds a research prompt and runs it through the Agent SDK's `query()` with only `WebSearch` and `WebFetch` tools enabled — the agent loops autonomously: search → open posting → verify the visa/relocation claim → collect.
-3. The finished digest is written to `digests/<date>.md` (and `digests/LATEST.md`).
-4. A GitHub Actions workflow runs the whole thing every **Monday and Thursday** and commits the digest back to the repo — so the repo itself is a living job feed.
+## What it demonstrates
 
-## Setup
-
-```bash
-npm install
-```
-
-**Auth** — one of:
-
-- **Locally**: if you use Claude Code, the SDK reuses your existing `claude` login — nothing to configure.
-- **CI / headless**: set `ANTHROPIC_API_KEY` (create one at [platform.claude.com](https://platform.claude.com)).
+- **Event-driven architecture** — the ingester publishes a `job.created` message per new job to an SQS queue; the indexer consumes and embeds asynchronously. Uses the real `@aws-sdk/client-sqs` against [ElasticMQ](https://github.com/softwaremill/elasticmq), so pointing `SQS_ENDPOINT` at real AWS SQS is the only change needed for production.
+- **Reconciliation over blind trust** — queues are at-least-once and consumers crash; a reconciler re-queues any job still unindexed after 5 minutes. Indexing is idempotent, so duplicates are harmless.
+- **Hybrid search relevance** — every query runs both full-text (Postgres `tsvector`, weighted title > company > description) and vector KNN (pgvector HNSW, cosine) retrieval, fused with Reciprocal Rank Fusion. The UI shows which retriever(s) matched each hit.
+- **Local embeddings** — `all-MiniLM-L6-v2` (384-dim) via Transformers.js, running on CPU inside the containers. No API keys, no external calls; the model is cached in a shared Docker volume.
+- **Agentic automation** — the original digest agent (in `agent/`) still runs twice a week via GitHub Actions, using Claude's `WebSearch`/`WebFetch` to hand-curate visa-sponsored roles into markdown digests.
 
 ## Run it
 
 ```bash
-npm run digest
+docker compose up --build
+# UI + API on http://localhost:8080  (override with API_PORT=8090 docker compose up)
 ```
 
-Progress streams to stderr; the digest lands in `digests/`.
+First start downloads the embedding model (~90 MB, cached in a volume). Within a minute or two the ingester pulls ~400 jobs, fans them through the queue, and the indexer embeds them. Watch it happen:
 
-Options via env vars:
+```bash
+docker compose logs -f ingester indexer
+curl localhost:8080/api/stats
+```
 
-| Variable | Default | Purpose |
+Try a semantic query — no keyword overlap required:
+
+```bash
+curl "localhost:8080/api/search?q=backend+engineer+search+infrastructure&visa=true"
+```
+
+## Services
+
+| Service | Path | Role |
 |---|---|---|
-| `CLAUDE_MODEL` | `claude-opus-4-8` | Model to run the agent on (e.g. `claude-sonnet-5` for cheaper runs) |
+| `ingester` | `services/ingester` | Polls the arbeitnow job API, dedupes into Postgres, publishes `job.created` events, reconciles missed indexing |
+| `indexer` | `services/indexer` | Long-polls SQS, embeds jobs with MiniLM, writes vectors to pgvector |
+| `api` | `services/api` | Hybrid search endpoint (FTS + KNN + RRF), stats, serves the UI |
+| `web` | `web` | React + Vite search UI with remote/visa filters |
+| `agent` | `agent` | Claude Agent SDK digest agent (scheduled via GitHub Actions) |
 
-## Schedule it on GitHub
+## API
 
-1. Push this repo to GitHub.
-2. Add a repository secret `ANTHROPIC_API_KEY` (Settings → Secrets and variables → Actions).
-3. Done — `.github/workflows/digest.yml` runs Mon/Thu at 08:00 MYT and commits each digest. You can also trigger it manually from the Actions tab (`workflow_dispatch`).
+| Endpoint | Description |
+|---|---|
+| `GET /api/search?q=...&remote=true&visa=true&limit=20` | Hybrid search; without `q` returns newest jobs |
+| `GET /api/stats` | Corpus counts and last ingest time |
 
-## Customize
+Search response items include `score` (RRF), `semantic_hit`, and `keyword_hit` so you can see *why* something ranked.
 
-Everything about *what* to search lives in `jobs.config.json`:
+## Documentation
 
-- `profiles` — the roles you (or your household!) are hunting for
-- `destinations` — countries/regions you'd relocate to
-- `sources` — job boards to scan
-- `maxJobs` / `freshnessDays` — digest size and recency
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — event flow, hybrid search internals, failure handling, the reconciler, and a debugging war story about silently vanishing queue messages.
 
-No code changes needed to retarget the agent.
+## Design notes
 
-## Why the Agent SDK?
+- **Why RRF?** Rank-based fusion needs no score normalization between BM25-style `ts_rank` and cosine distance — robust and simple. `score = Σ 1/(60 + rank_i)`.
+- **Why one Postgres for both retrievers?** One container, transactional consistency between raw rows and vectors, and `tsvector` + `pgvector` cover hybrid search without an extra search cluster. At larger scale you'd split into a dedicated engine (Elasticsearch/OpenSearch) — the queue-based indexing pattern stays identical.
+- **Why detect visa support by keywords at ingest?** The source API has no visa flag. A regex over title/tags/description marks explicit mentions; semantic search catches the rest at query time.
 
-The Agent SDK is Claude Code packaged as a library: it ships the agentic loop, built-in tools (`WebSearch`, `WebFetch`, file ops, bash), permissions, and context management. This project is deliberately small — the "hard part" (multi-step autonomous research with verification) is entirely handled by `query()` with a well-specified prompt.
+## Digest agent (the original project)
+
+Lives in `agent/` — an autonomous researcher that scans job boards for visa-sponsored roles matching `agent/jobs.config.json` and writes verified markdown digests. Runs Mon/Thu via `.github/workflows/digest.yml` (needs an `ANTHROPIC_API_KEY` repo secret). Locally: `cd agent && npm run digest`.
 
 ## License
 

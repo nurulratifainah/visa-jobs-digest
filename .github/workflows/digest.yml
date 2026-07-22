@@ -13,6 +13,9 @@ jobs:
   digest:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: agent
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +23,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: agent/package-lock.json
 
       - run: npm ci
 

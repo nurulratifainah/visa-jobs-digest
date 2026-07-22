@@ -1,5 +1,5 @@
 {
-  "name": "visa-jobs-digest",
+  "name": "@visa-jobs/digest-agent",
   "version": "1.0.0",
   "description": "An autonomous agent (Claude Agent SDK) that scans job boards for visa-sponsored tech jobs and writes a curated markdown digest",
   "type": "module",

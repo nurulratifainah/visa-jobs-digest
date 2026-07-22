@@ -1,0 +1,68 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: jobs
+      POSTGRES_PASSWORD: jobs
+      POSTGRES_DB: jobs
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobs"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  queue:
+    # SQS-compatible queue — services talk to it with the real AWS SDK.
+    # Swap SQS_ENDPOINT for a real SQS URL in production and nothing else changes.
+    image: softwaremill/elasticmq-native:latest
+    ports:
+      - "9324:9324"
+
+  ingester:
+    build: ./services/ingester
+    environment: &common-env
+      DATABASE_URL: postgres://jobs:jobs@db:5432/jobs
+      SQS_ENDPOINT: http://queue:9324
+      SQS_QUEUE_NAME: job-indexing
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+    depends_on:
+      db:
+        condition: service_healthy
+      queue:
+        condition: service_started
+    restart: unless-stopped
+
+  indexer:
+    build: ./services/indexer
+    environment: *common-env
+    volumes:
+      - model-cache:/models
+    depends_on:
+      db:
+        condition: service_healthy
+      queue:
+        condition: service_started
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment: *common-env
+    volumes:
+      - model-cache:/models
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  model-cache:
