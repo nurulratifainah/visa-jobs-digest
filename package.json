@@ -1,0 +1,27 @@
+{
+  "name": "visa-jobs-digest",
+  "version": "1.0.0",
+  "description": "An autonomous agent (Claude Agent SDK) that scans job boards for visa-sponsored tech jobs and writes a curated markdown digest",
+  "type": "module",
+  "scripts": {
+    "digest": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "claude",
+    "agent",
+    "claude-agent-sdk",
+    "jobs",
+    "visa-sponsorship",
+    "automation"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

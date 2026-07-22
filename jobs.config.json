@@ -1,0 +1,34 @@
+{
+  "profiles": [
+    {
+      "label": "Backend / Full-Stack Engineer",
+      "keywords": ["Node.js", "TypeScript", "Groovy", "backend", "full stack"],
+      "note": "Strongest in Node.js, TypeScript, and Groovy, but language is NOT mandatory — include strong backend/full-stack roles in any stack (Java, Go, Python, etc.)."
+    },
+    {
+      "label": "Mobile App Developer",
+      "keywords": ["iOS", "Android", "React Native", "Flutter"],
+      "note": "Native or cross-platform mobile roles."
+    }
+  ],
+  "destinations": [
+    "Europe (EU/UK — especially Germany, Netherlands, Nordics, Ireland)",
+    "Singapore",
+    "Japan",
+    "Australia",
+    "New Zealand",
+    "Remote roles anywhere that are open to candidates needing visa support"
+  ],
+  "sources": [
+    "relocate.me",
+    "japan-dev.com",
+    "tokyodev.com",
+    "landing.jobs",
+    "arbeitnow.com",
+    "germantechjobs.de",
+    "swissdevjobs.ch",
+    "LinkedIn and Indeed postings explicitly mentioning visa sponsorship or relocation assistance"
+  ],
+  "maxJobs": 30,
+  "freshnessDays": 7
+}
