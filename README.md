@@ -19,6 +19,10 @@ An event-driven **hybrid job search engine** for visa-friendly tech jobs — BM2
  (separate) GitHub Actions cron ──▶ digest agent (Claude Agent SDK) ──▶ digests/*.md
 ```
 
+![Compare view: the same query through BM25, cosine KNN and RRF hybrid, side by side](docs/img/compare.png)
+
+*The compare view runs one query through all three retrievers. Highlighted rows appear in only one column — the cases where retriever choice changes what the user sees. Every result carries its rank and raw score in each retriever.*
+
 ## What it demonstrates
 
 - **Event-driven architecture** — the ingester publishes a `job.created` message per new job to an SQS queue; the indexer consumes and embeds asynchronously. Uses the real `@aws-sdk/client-sqs` against [ElasticMQ](https://github.com/softwaremill/elasticmq), so pointing `SQS_ENDPOINT` at real AWS SQS is the only change needed for production.
@@ -66,6 +70,10 @@ docker compose exec api npm run eval -- --verbose # per-query breakdown
 ```bash
 docker compose exec -T db psql -U jobs -d jobs < db/init.sql
 ```
+
+![Hybrid results with per-result ranking explanation and filters](docs/img/hybrid.png)
+
+*Hybrid mode with the visa filter. Each card explains its rank: RRF total, BM25 rank and points, vector rank and cosine similarity.*
 
 ## Services
 

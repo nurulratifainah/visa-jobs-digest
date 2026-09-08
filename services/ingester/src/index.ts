@@ -33,13 +33,31 @@ async function ensureQueue(): Promise<string> {
   return res.QueueUrl;
 }
 
-function stripHtml(html: string): string {
-  return html
-    .replace(/<[^>]+>/g, " ")
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
     .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
+    .replace(/&(m|n)dash;/g, "-")
+    .replace(/&hellip;/g, "...")
+    .replace(/&(l|r)squo;/g, "'")
+    .replace(/&(l|r)dquo;/g, '"')
+    .replace(/&bull;/g, "-")
+    .replace(/&euro;/g, "EUR")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * Some ads arrive double-encoded (`&lt;h2&gt;` instead of `<h2>`), so tags only
+ * become visible after entity decoding. Decode → strip → decode handles both
+ * the honest and the double-encoded case.
+ */
+export function stripHtml(html: string): string {
+  return decodeEntities(decodeEntities(html).replace(/<[^>]+>/g, " "))
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -171,9 +189,31 @@ async function backfillSeniority(): Promise<void> {
   }
 }
 
+/**
+ * Re-clean descriptions that still contain markup or entities (ingested before
+ * the double-encoding fix). Clearing the embedding hands the row back to the
+ * reconciler, which re-queues it for indexing — no special re-embed path needed.
+ */
+async function backfillDescriptions(): Promise<void> {
+  const { rows } = await pool.query<{ id: string; description: string }>(
+    String.raw`SELECT id, description FROM jobs
+               WHERE description ~ '<[a-zA-Z][^>]*>|&#?[a-zA-Z0-9]+;'`,
+  );
+  for (const row of rows) {
+    await pool.query(
+      "UPDATE jobs SET description = $1, embedding = NULL, indexed_at = NULL WHERE id = $2",
+      [stripHtml(row.description).slice(0, 8000), Number(row.id)],
+    );
+  }
+  if (rows.length > 0) {
+    console.log(`[ingester] backfill: re-cleaned ${rows.length} descriptions, queued for re-embedding`);
+  }
+}
+
 async function main(): Promise<void> {
   const queueUrl = await ensureQueue();
   await backfillSeniority();
+  await backfillDescriptions();
   console.log(`[ingester] queue ready: ${queueUrl}, polling arbeitnow every ${INTERVAL_MS / 60000} min`);
 
   for (;;) {

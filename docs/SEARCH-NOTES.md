@@ -150,14 +150,22 @@ Latest run on this machine (1,136 jobs, all embedded, shipped weights):
 <!-- eval-results:start -->
 | config | P@10 | R@10 | MRR | nDCG@10 | p50 ms | p95 ms |
 |---|---|---|---|---|---|---|
-| keyword/ts_rank | 0.794 | 0.810 | 1.000 | 0.854 | 10 | 63 |
-| keyword/bm25 | 0.656 | 0.673 | 0.938 | 0.717 | 43 | 65 |
-| semantic | 0.550 | 0.567 | 1.000 | 0.645 | 21 | 50 |
-| hybrid/ts_rank | 0.656 | 0.673 | 1.000 | 0.756 | 26 | 48 |
-| hybrid/bm25 | 0.638 | 0.654 | 0.969 | 0.710 | 52 | 61 |
+| keyword/ts_rank | 0.794 | 0.810 | 1.000 | 0.854 | 14 | 67 |
+| keyword/bm25 | 0.638 | 0.654 | 0.922 | 0.703 | 26 | 33 |
+| semantic | 0.581 | 0.598 | 1.000 | 0.669 | 28 | 47 |
+| hybrid/ts_rank | 0.688 | 0.704 | 1.000 | 0.788 | 21 | 48 |
+| hybrid/bm25 | 0.681 | 0.698 | 0.969 | 0.740 | 45 | 54 |
 <!-- eval-results:end -->
 
 ### What the numbers taught me
+
+**0. Data cleaning moved the numbers more than any ranking change.** A
+screenshot for the README showed raw `<h2>` tags in a snippet. The source
+double-encodes some ads (`&lt;h2&gt;`), so stripping tags *before* decoding
+entities left the markup in 319 of 1,137 descriptions — and in their
+embeddings. Fixing the order and re-embedding lifted semantic P@10 from 0.550
+to 0.581 and hybrid/bm25 from 0.638 to 0.681, with no change to the ranker.
+Look at your documents before tuning your scorer.
 
 **1. A flat-field BM25 lost badly to `ts_rank` (P@10 0.594 vs 0.794).** My
 first BM25 counted every occurrence equally wherever it appeared. `ts_rank`
@@ -177,15 +185,17 @@ the *description* — the skills list, the visa clause — which is where IDF an
 length normalisation earn their keep. Lesson: the eval is only as good as its
 judgments; build the judgment pipeline before tuning the ranker.
 
-**3. Hybrid did not beat the best single retriever.** RRF weights both lists
-equally, so when one retriever is clearly weaker (semantic on a German-heavy
-corpus with an English model, scored by title regexes) it drags the fused list
-down. Hybrid *does* win on MRR — the first result is almost always right —
-because agreement between retrievers is a strong signal at the very top. Fixes
+**3. Hybrid beats each of its own inputs, but not the best single retriever.**
+hybrid/bm25 (0.681) is above both bm25 (0.638) and semantic (0.581) — fusion
+works. It still trails ts_rank alone because RRF weights both lists equally, so
+a weaker semantic list (English model, German-heavy corpus, title-regex judge)
+dilutes a stronger lexical one. Hybrid *does* match the best MRR — the first
+result is almost always right — because agreement between retrievers is a
+strong signal at the very top. Fixes
 in order of cheapness: weighted RRF (`w_r / (k + rank)`), a multilingual
 embedding model, a cross-encoder re-ranker over the fused top 50.
 
-**4. Latency.** BM25 in SQL costs ~40 ms at 1.1k docs / 330k postings, most of
+**4. Latency.** BM25 in SQL costs ~25–45 ms at 1.1k docs / 330k postings, most of
 it the per-query `df` and corpus aggregates; `ts_rank` over the GIN index is
 ~10 ms. Query embedding (~130 ms, not included above because eval hits one
 mode at a time) dominates everything. Cache it.

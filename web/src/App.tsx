@@ -54,6 +54,35 @@ interface FilterState {
 const DEFAULT_FILTERS: FilterState = { remote: "any", visa: "any", location: "", skills: "", seniority: "" };
 const SENIORITY = ["intern", "junior", "mid", "senior", "lead", "principal", "manager"];
 
+/** Read initial state from the URL so a search is shareable (…/?q=…&view=compare&seniority=senior). */
+function stateFromUrl(): { q: string; view: View; lexical: Lexical; filters: FilterState } {
+  const p = new URLSearchParams(window.location.search);
+  const view = p.get("view");
+  const lexical = p.get("lexical");
+  const tri = (v: string | null): TriState => (v === "true" || v === "false" ? v : "any");
+  return {
+    q: p.get("q") ?? "",
+    view: view === "keyword" || view === "semantic" || view === "compare" ? view : "hybrid",
+    lexical: lexical === "ts_rank" ? "ts_rank" : "bm25",
+    filters: {
+      remote: tri(p.get("remote")),
+      visa: tri(p.get("visa")),
+      location: p.get("location") ?? "",
+      skills: p.get("skills") ?? "",
+      seniority: p.get("seniority") ?? "",
+    },
+  };
+}
+
+function syncUrl(q: string, f: FilterState, v: View, lex: Lexical): void {
+  const params = filterParams(f);
+  if (q) params.set("q", q);
+  if (v !== "hybrid") params.set("view", v);
+  if (lex !== "bm25") params.set("lexical", lex);
+  const qs = params.toString();
+  window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
+}
+
 function filterParams(f: FilterState): URLSearchParams {
   const params = new URLSearchParams();
   if (f.remote !== "any") params.set("remote", f.remote);
@@ -65,10 +94,11 @@ function filterParams(f: FilterState): URLSearchParams {
 }
 
 export default function App() {
-  const [query, setQuery] = useState("");
-  const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
-  const [view, setView] = useState<View>("hybrid");
-  const [lexical, setLexical] = useState<Lexical>("bm25");
+  const [initial] = useState(stateFromUrl);
+  const [query, setQuery] = useState(initial.q);
+  const [filters, setFilters] = useState<FilterState>(initial.filters);
+  const [view, setView] = useState<View>(initial.view);
+  const [lexical, setLexical] = useState<Lexical>(initial.lexical);
   const [results, setResults] = useState<JobResult[]>([]);
   const [compare, setCompare] = useState<CompareColumn[] | null>(null);
   const [mode, setMode] = useState("latest");
@@ -107,15 +137,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    search("", DEFAULT_FILTERS, "hybrid", "bm25");
+    search(initial.q, initial.filters, initial.view, initial.lexical);
     fetch("/api/stats")
       .then((r) => r.json())
       .then(setStats)
       .catch(() => {});
-  }, [search]);
+  }, [search, initial]);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    syncUrl(query, filters, view, lexical);
     search(query, filters, view, lexical);
   };
 
