@@ -1,6 +1,6 @@
-# Visa Jobs — Semantic Search Engine 🛂🔍
+# Visa Jobs — Hybrid Search Engine 🛂🔍
 
-An event-driven **semantic job search engine** for visa-friendly tech jobs, plus an autonomous [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/quickstart) digest agent. One `docker compose up` runs the whole thing.
+An event-driven **hybrid job search engine** for visa-friendly tech jobs — BM25 implemented in SQL, pgvector KNN, Reciprocal Rank Fusion, structured filters pushed into every retriever, a side-by-side retriever comparison, and an offline relevance eval (P@K / R@K / MRR / nDCG). Plus an autonomous [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/quickstart) digest agent. One `docker compose up` runs the whole thing.
 
 ```
                     ┌─────────────────────────────────────────────────────┐
@@ -13,7 +13,7 @@ An event-driven **semantic job search engine** for visa-friendly tech jobs, plus
                     │  SQS queue (ElasticMQ) ──▶ indexer ───┘    │         │
                     │                     embeds w/ MiniLM       │         │
                     │                                            │         │
- browser ◀────────▶ │  React UI ◀── api (hybrid BM25+KNN, RRF) ──┘         │
+ browser ◀────────▶ │  React UI ◀── api (BM25 | KNN | RRF hybrid) ┘         │
                     └─────────────────────────────────────────────────────┘
 
  (separate) GitHub Actions cron ──▶ digest agent (Claude Agent SDK) ──▶ digests/*.md
@@ -23,7 +23,10 @@ An event-driven **semantic job search engine** for visa-friendly tech jobs, plus
 
 - **Event-driven architecture** — the ingester publishes a `job.created` message per new job to an SQS queue; the indexer consumes and embeds asynchronously. Uses the real `@aws-sdk/client-sqs` against [ElasticMQ](https://github.com/softwaremill/elasticmq), so pointing `SQS_ENDPOINT` at real AWS SQS is the only change needed for production.
 - **Reconciliation over blind trust** — queues are at-least-once and consumers crash; a reconciler re-queues any job still unindexed after 5 minutes. Indexing is idempotent, so duplicates are harmless.
-- **Hybrid search relevance** — every query runs both full-text (Postgres `tsvector`, weighted title > company > description) and vector KNN (pgvector HNSW, cosine) retrieval, fused with Reciprocal Rank Fusion. The UI shows which retriever(s) matched each hit.
+- **BM25 in plain SQL** — Postgres' `ts_rank` is not BM25 (no IDF, no length normalisation). A trigger maintains an inverted index (`job_terms`: job, lexeme, field-weighted tf) from the same `tsvector`, and `bm25Cte()` computes the textbook formula with `k1 = 1.2`, `b = 0.75`. Both rankers are exposed so you can compare them on identical tokens.
+- **Three retrieval modes, one SQL round-trip** — `mode=keyword|semantic|hybrid`. Hybrid fuses BM25 and pgvector cosine KNN with Reciprocal Rank Fusion. Every result reports its rank and raw score in each retriever, so you can see *why* it ranked.
+- **Filters pushed into the retrievers** — `remote`, `visa`, `location`, `skills` (tag or text, all required) and `seniority` (derived at ingest from the title) are applied inside each candidate query, not after fusion. Post-filtering a top-60 list returns almost nothing once a filter is selective.
+- **Compare view + offline eval** — the UI shows BM25, semantic and hybrid side by side and highlights results unique to one retriever. `npm run eval` scores five configurations on 16 queries with P@10, R@10, MRR, nDCG@10 and latency, so ranking changes are measured rather than eyeballed. See [docs/SEARCH-NOTES.md](docs/SEARCH-NOTES.md) for the results and what they taught me.
 - **Local embeddings** — `all-MiniLM-L6-v2` (384-dim) via Transformers.js, running on CPU inside the containers. No API keys, no external calls; the model is cached in a shared Docker volume.
 - **Agentic automation** — the original digest agent (in `agent/`) still runs twice a week via GitHub Actions, using Claude's `WebSearch`/`WebFetch` to hand-curate visa-sponsored roles into markdown digests.
 
@@ -41,10 +44,27 @@ docker compose logs -f ingester indexer
 curl localhost:8080/api/stats
 ```
 
-Try a semantic query — no keyword overlap required:
+Try a semantic query — no keyword overlap required — then the same query through each retriever:
 
 ```bash
 curl "localhost:8080/api/search?q=backend+engineer+search+infrastructure&visa=true"
+curl "localhost:8080/api/search?q=backend+engineer+search+infrastructure&mode=keyword&lexical=bm25"
+curl "localhost:8080/api/search?q=backend+engineer+search+infrastructure&mode=keyword&lexical=ts_rank"
+curl "localhost:8080/api/search?q=backend+engineer+search+infrastructure&mode=semantic"
+curl "localhost:8080/api/compare?q=machine+learning+engineer&seniority=senior,lead&location=berlin"
+```
+
+Measure relevance across configurations:
+
+```bash
+docker compose exec api npm run eval              # summary table
+docker compose exec api npm run eval -- --verbose # per-query breakdown
+```
+
+**Upgrading an existing database** — `init.sql` only runs on an empty volume. It is idempotent, so apply it to a running instance and it adds the new columns, builds the BM25 index and backfills:
+
+```bash
+docker compose exec -T db psql -U jobs -d jobs < db/init.sql
 ```
 
 ## Services
@@ -53,22 +73,36 @@ curl "localhost:8080/api/search?q=backend+engineer+search+infrastructure&visa=tr
 |---|---|---|
 | `ingester` | `services/ingester` | Polls the arbeitnow job API, dedupes into Postgres, publishes `job.created` events, reconciles missed indexing |
 | `indexer` | `services/indexer` | Long-polls SQS, embeds jobs with MiniLM, writes vectors to pgvector |
-| `api` | `services/api` | Hybrid search endpoint (FTS + KNN + RRF), stats, serves the UI |
-| `web` | `web` | React + Vite search UI with remote/visa filters |
+| `api` | `services/api` | Search (BM25 / ts_rank / KNN / RRF hybrid), compare, stats, eval script, serves the UI |
+| `web` | `web` | React + Vite search UI: retriever switch, filters, compare view, per-result ranking explanation |
 | `agent` | `agent` | Claude Agent SDK digest agent (scheduled via GitHub Actions) |
 
 ## API
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/search?q=...&remote=true&visa=true&limit=20` | Hybrid search; without `q` returns newest jobs |
-| `GET /api/stats` | Corpus counts and last ingest time |
+| `GET /api/search?q=...` | Search; without `q` returns newest jobs (filters still apply) |
+| `GET /api/compare?q=...` | Same query through keyword, semantic and hybrid — one embedding, three ranked lists with timings |
+| `GET /api/stats` | Corpus counts, seniority breakdown, BM25 posting count, last ingest time |
 
-Search response items include `score` (RRF), `semantic_hit`, and `keyword_hit` so you can see *why* something ranked.
+Search parameters:
+
+| Param | Values | Notes |
+|---|---|---|
+| `mode` | `hybrid` (default), `keyword`, `semantic` | |
+| `lexical` | `bm25` (default), `ts_rank` | Which lexical ranker keyword/hybrid use |
+| `remote`, `visa` | `true`, `false` | |
+| `location` | substring, e.g. `berlin` | Case-insensitive |
+| `skills` | comma list, e.g. `python,kubernetes` | Every skill must appear as a tag or in title/description |
+| `seniority` | comma list of `intern,junior,mid,senior,lead,principal,manager` | Derived from the title at ingest |
+| `limit` | ≤ 50 | |
+
+Each result carries `score` (RRF in hybrid, otherwise the retriever's own score), `keyword_rank` / `keyword_score`, `semantic_rank` / `cosine_similarity`, and `keyword_hit` / `semantic_hit`.
 
 ## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — event flow, hybrid search internals, failure handling, the reconciler, and a debugging war story about silently vanishing queue messages.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — event flow, hybrid search internals, filter pushdown, failure handling, the reconciler, and a debugging war story about silently vanishing queue messages.
+- [docs/SEARCH-NOTES.md](docs/SEARCH-NOTES.md) — BM25, embeddings, cosine similarity and RRF explained with the formulas, where each lives in the code, eval results, and what they taught me (including why a naive BM25 lost to `ts_rank`).
 
 ## Why this stack?
 
@@ -110,8 +144,18 @@ The ingester could call the embedder directly — at 400 jobs that would even be
 
 ### Other notes
 
-- **Why RRF for fusion?** Rank-based fusion needs no score normalization between `ts_rank` values and cosine distances — the two retrievers never have to agree on what a "good score" is. `score = Σ 1/(60 + rank_i)`.
+- **Why RRF for fusion?** Rank-based fusion needs no score normalization between BM25 points and cosine distances — the two retrievers never have to agree on what a "good score" is. `score = Σ 1/(60 + rank_i)`. A consequence worth knowing: a document both retrievers rank mid-list beats one that a single retriever ranks #1.
+- **Why implement BM25 by hand when `ts_rank` exists?** To be able to compare them on identical tokens and to understand what each term in the formula does. The eval then showed `ts_rank`'s field weights mattered more than BM25's IDF on this corpus — which is how the BM25 index became field-weighted (BM25F-style). Details in [docs/SEARCH-NOTES.md](docs/SEARCH-NOTES.md).
 - **Why detect visa support by keywords at ingest?** The source API has no visa flag. A regex over title/tags/description marks explicit mentions cheaply at write time; semantic search catches implicit ones at query time.
+
+## Roadmap
+
+Next layers of a production ranking stack, in the order I plan to add them:
+
+1. **Cross-encoder re-ranking** of the fused top 50 (a small local reranker via Transformers.js), measured with the same eval.
+2. **Learning to rank** — swap the heuristic judgments for click/apply signals and train a LambdaMART model over BM25, cosine, recency and filter-match features (I run this pipeline on Elasticsearch professionally; here it would be pure Postgres).
+3. **Job recommendations** — "similar jobs" from the existing vectors, then a user profile vector from saved/applied jobs.
+4. **Multilingual embeddings** — the corpus skews German and MiniLM is English-only.
 
 ## Digest agent (the original project)
 

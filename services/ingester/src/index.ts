@@ -51,6 +51,26 @@ function detectVisaSupport(job: ArbeitnowJob, plainDescription: string): boolean
   );
 }
 
+/**
+ * Seniority is a filter users reach for constantly and job boards rarely
+ * expose. The title is the only reliable signal, so classify it at write time
+ * (cheap, indexable) rather than at query time. Order matters: "Senior Team
+ * Lead" is a lead, "Lead Junior Developer" is not junior — check from the top.
+ */
+export type Seniority = "intern" | "junior" | "mid" | "senior" | "lead" | "principal" | "manager";
+
+export function detectSeniority(title: string): Seniority | null {
+  const t = title.toLowerCase();
+  if (/\b(intern|internship|praktikum|praktikant|werkstudent|working student|trainee|apprentice)\b/.test(t)) return "intern";
+  if (/\b(head of|director|vp|vice president|cto|chief|manager|engineering lead)\b/.test(t)) return "manager";
+  if (/\b(principal|distinguished|fellow|architect)\b/.test(t)) return "principal";
+  if (/\b(staff|lead|tech lead|team lead|teamleiter)\b/.test(t)) return "lead";
+  if (/\b(senior|sr\.?|expert)\b/.test(t)) return "senior";
+  if (/\b(junior|jr\.?|entry.level|graduate|associate|berufseinsteiger)\b/.test(t)) return "junior";
+  if (/\b(mid.level|intermediate|professional|\(m\/w\/d\)|engineer|developer|entwickler)\b/.test(t)) return "mid";
+  return null;
+}
+
 async function fetchPage(page: number): Promise<ArbeitnowJob[]> {
   const res = await fetch(`${ARBEITNOW_API}?page=${page}`);
   if (!res.ok) throw new Error(`arbeitnow page ${page}: HTTP ${res.status}`);
@@ -69,8 +89,8 @@ async function ingestOnce(queueUrl: string): Promise<void> {
     for (const job of jobs) {
       const description = stripHtml(job.description).slice(0, 8000);
       const result = await pool.query<{ id: number }>(
-        `INSERT INTO jobs (external_id, title, company, location, remote, visa_sponsorship, tags, url, description, posted_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, to_timestamp($10))
+        `INSERT INTO jobs (external_id, title, company, location, remote, visa_sponsorship, seniority, tags, url, description, posted_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, to_timestamp($11))
          ON CONFLICT (external_id) DO NOTHING
          RETURNING id`,
         [
@@ -80,7 +100,9 @@ async function ingestOnce(queueUrl: string): Promise<void> {
           job.location,
           job.remote,
           detectVisaSupport(job, description),
-          job.tags,
+          detectSeniority(job.title),
+          // Lower-cased so the skills filter can use indexed array containment (tags @> ARRAY['python']).
+          Array.from(new Set(job.tags.map((t) => t.trim().toLowerCase()).filter(Boolean))),
           job.url,
           description,
           job.created_at,
@@ -128,8 +150,30 @@ async function requeueUnindexed(queueUrl: string): Promise<void> {
   }
 }
 
+/**
+ * Derived fields get backfilled at startup so a schema change never requires
+ * re-ingesting. Rows the classifier can't place stay NULL and are re-checked
+ * next boot — cheap, and it means a better regex tomorrow applies to old rows.
+ */
+async function backfillSeniority(): Promise<void> {
+  const { rows } = await pool.query<{ id: string; title: string }>(
+    "SELECT id, title FROM jobs WHERE seniority IS NULL",
+  );
+  let updated = 0;
+  for (const row of rows) {
+    const level = detectSeniority(row.title);
+    if (!level) continue;
+    await pool.query("UPDATE jobs SET seniority = $1 WHERE id = $2", [level, Number(row.id)]);
+    updated++;
+  }
+  if (rows.length > 0) {
+    console.log(`[ingester] backfill: classified seniority for ${updated}/${rows.length} unlabelled jobs`);
+  }
+}
+
 async function main(): Promise<void> {
   const queueUrl = await ensureQueue();
+  await backfillSeniority();
   console.log(`[ingester] queue ready: ${queueUrl}, polling arbeitnow every ${INTERVAL_MS / 60000} min`);
 
   for (;;) {

@@ -5,6 +5,9 @@ services:
       POSTGRES_USER: jobs
       POSTGRES_PASSWORD: jobs
       POSTGRES_DB: jobs
+    ports:
+      # Exposed for psql / local `npm run eval`; 5434 avoids clashing with a host Postgres.
+      - "${DB_PORT:-5434}:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
