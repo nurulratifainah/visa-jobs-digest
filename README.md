@@ -32,6 +32,7 @@ An event-driven **hybrid job search engine** for visa-friendly tech jobs — BM2
 - **Filters pushed into the retrievers** — `remote`, `visa`, `location`, `skills` (tag or text, all required) and `seniority` (derived at ingest from the title) are applied inside each candidate query, not after fusion. Post-filtering a top-60 list returns almost nothing once a filter is selective.
 - **Compare view + offline eval** — the UI shows BM25, semantic and hybrid side by side and highlights results unique to one retriever. `npm run eval` scores five configurations on 16 queries with P@10, R@10, MRR, nDCG@10 and latency, so ranking changes are measured rather than eyeballed. See [docs/SEARCH-NOTES.md](docs/SEARCH-NOTES.md) for the results and what they taught me.
 - **Local embeddings** — `all-MiniLM-L6-v2` (384-dim) via Transformers.js, running on CPU inside the containers. No API keys, no external calls; the model is cached in a shared Docker volume.
+- **AI-first development workflow** — agents write code under enforced guardrails: `CLAUDE.md` + reusable skills, hooks that typecheck every edit and block "done" while tests are red, an AI reviewer on every PR driven by repo-specific rules, and `@claude` issue → PR automation. CI (typecheck + unit + SQL integration tests on real pgvector) and a human review stay the gate. See [docs/AI-WORKFLOW.md](docs/AI-WORKFLOW.md).
 - **Agentic automation** — the original digest agent (in `agent/`) still runs twice a week via GitHub Actions, using Claude's `WebSearch`/`WebFetch` to hand-curate visa-sponsored roles into markdown digests.
 
 ## Run it
@@ -110,7 +111,18 @@ Each result carries `score` (RRF in hybrid, otherwise the retriever's own score)
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — event flow, hybrid search internals, filter pushdown, failure handling, the reconciler, and a debugging war story about silently vanishing queue messages.
+- [docs/AI-WORKFLOW.md](docs/AI-WORKFLOW.md) — the AI-first dev workflow: agent context, hooks, CI, AI code review, issue → PR, and what the first test run caught.
 - [docs/SEARCH-NOTES.md](docs/SEARCH-NOTES.md) — BM25, embeddings, cosine similarity and RRF explained with the formulas, where each lives in the code, eval results, and what they taught me (including why a naive BM25 lost to `ts_rank`).
+
+## Development workflow
+
+```bash
+cd services/api && npm test          # unit tests (+ SQL integration tests if TEST_DATABASE_URL is set)
+cd services/ingester && npm test
+npm run typecheck                    # in any package
+```
+
+This repo is developed AI-first, with guardrails: agents follow [`CLAUDE.md`](CLAUDE.md) and [`.claude/skills/`](.claude/skills), local hooks enforce typecheck and green tests, every PR gets CI plus an AI first-pass review against [`.github/review-rules.md`](.github/review-rules.md), and mentioning `@claude` on an issue opens a PR. Details, design decisions and lessons learned: [docs/AI-WORKFLOW.md](docs/AI-WORKFLOW.md).
 
 ## Why this stack?
 
