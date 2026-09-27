@@ -16,6 +16,7 @@ COPY services/api/package*.json ./
 RUN npm ci --omit=dev
 COPY services/api/tsconfig.json ./
 COPY services/api/src ./src
+COPY services/api/eval ./eval
 COPY --from=web-build /web/dist ./web-dist
 EXPOSE 8080
 CMD ["npm", "start"]

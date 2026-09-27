@@ -53,3 +53,33 @@ header h1 { font-size: 1.9rem; letter-spacing: -0.02em; }
 .snippet { color: #aab3c5; font-size: 0.86rem; margin-top: 10px; line-height: 1.5; }
 .tags { color: #566179; font-size: 0.78rem; margin-top: 10px; }
 .empty { color: #9aa3b5; text-align: center; padding: 40px; }
+
+/* --- search controls (mode / filters) --- */
+.page.wide { max-width: 1240px; }
+.filters { flex-wrap: wrap; row-gap: 10px; }
+.filters label { display: inline-flex; align-items: center; gap: 6px; }
+.filters select { margin-left: 0; }
+.filters select:disabled { opacity: 0.45; }
+.filters input.small {
+  width: 150px; padding: 4px 8px; font-size: 0.85rem; border-radius: 6px;
+  border: 1px solid #2a3350; background: #171e30; color: #e6e9f0;
+}
+.filters input.small:focus { outline: 2px solid #4f7cff; border-color: transparent; }
+
+.pill.level { background: #2a2440; color: #c9b8ff; }
+.why { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.74rem; color: #6f7b95; margin-top: 8px; }
+
+/* --- compare view --- */
+.compare { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 24px; }
+@media (max-width: 900px) { .compare { grid-template-columns: 1fr; } }
+.column { background: #131a2b; border: 1px solid #232c47; border-radius: 12px; padding: 14px; min-width: 0; }
+.column h3 { font-size: 0.9rem; color: #cdd6f4; display: flex; justify-content: space-between; align-items: baseline; }
+.column .took { font-family: ui-monospace, monospace; font-size: 0.72rem; color: #566179; font-weight: normal; }
+.column ol { margin: 12px 0 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; }
+.mini { font-size: 0.84rem; line-height: 1.35; padding: 6px 8px; border-radius: 8px; border: 1px solid transparent; }
+.mini.unique { border-color: #3b2f1e; background: #1b1a22; }
+.mini a { color: #cdd6f4; text-decoration: none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini a:hover { color: #8ab0ff; }
+.mini-meta { display: block; color: #8a94a8; font-size: 0.76rem; }
+.mini-score { display: block; font-family: ui-monospace, monospace; font-size: 0.7rem; color: #566179; margin-top: 2px; }
+.mini.empty { color: #566179; list-style: none; padding: 20px 0; text-align: center; }

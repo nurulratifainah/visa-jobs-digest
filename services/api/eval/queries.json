@@ -1,0 +1,69 @@
+{
+  "_comment": "Relevance judgments are heuristic: a job counts as relevant if its title matches title_regex OR any of its tags is in any_tags. Regexes deliberately include synonyms the query does not contain so semantic recall can score too. This is a smoke test for ranking changes, not ground truth — see docs/SEARCH-NOTES.md.",
+  "queries": [
+    {
+      "query": "backend engineer",
+      "relevant": { "title_regex": "back.?end|server.?side|api (engineer|developer)|platform engineer", "any_tags": ["backend"] }
+    },
+    {
+      "query": "frontend developer react",
+      "relevant": { "title_regex": "front.?end|react|angular|vue|ui (engineer|developer)|web ?developer", "any_tags": ["frontend", "react"] }
+    },
+    {
+      "query": "data scientist machine learning",
+      "relevant": { "title_regex": "data scien|machine learning|ml engineer|\\bai\\b|deep learning|nlp", "any_tags": ["machine learning", "data science"] }
+    },
+    {
+      "query": "devops kubernetes cloud infrastructure",
+      "relevant": { "title_regex": "devops|site reliability|\\bsre\\b|platform|cloud|infrastructure|kubernetes", "any_tags": ["devops", "cloud"] }
+    },
+    {
+      "query": "mobile app developer",
+      "relevant": { "title_regex": "mobile|ios|android|flutter|react native|swift|kotlin", "any_tags": ["mobile", "ios", "android"] }
+    },
+    {
+      "query": "product manager",
+      "relevant": { "title_regex": "product (manager|owner|lead)|\\bpo\\b|produktmanager", "any_tags": ["product"] }
+    },
+    {
+      "query": "qa test automation engineer",
+      "relevant": { "title_regex": "\\bqa\\b|test|quality|sdet|testautomat", "any_tags": ["qa", "testing"] }
+    },
+    {
+      "query": "security engineer",
+      "relevant": { "title_regex": "security|penetration|appsec|\\biam\\b|cyber|sicherheit", "any_tags": ["security"] }
+    },
+    {
+      "query": "java spring developer",
+      "relevant": { "title_regex": "java(?!script)|spring|kotlin|jvm", "any_tags": ["java", "spring"] }
+    },
+    {
+      "query": "python developer",
+      "relevant": { "title_regex": "python|django|flask|fastapi", "any_tags": ["python"] }
+    },
+    {
+      "query": "data engineer pipelines",
+      "relevant": { "title_regex": "data engineer|etl|pipeline|analytics engineer|dwh|data platform|big data", "any_tags": ["data engineering", "big data"] }
+    },
+    {
+      "query": "ux designer",
+      "relevant": { "title_regex": "ux|ui/ux|product design|user experience|designer", "any_tags": ["design", "ux"] }
+    },
+    {
+      "query": "sales development representative",
+      "relevant": { "title_regex": "sales|account (executive|manager)|business development|\\bsdr\\b|\\bbdr\\b|vertrieb", "any_tags": ["sales"] }
+    },
+    {
+      "query": "engineering manager leading a team",
+      "relevant": { "title_regex": "engineering manager|head of (engineering|software|development)|team lead|tech lead|director of engineering|cto", "any_tags": ["management"] }
+    },
+    {
+      "query": "working student software",
+      "relevant": { "title_regex": "werkstudent|working student|intern|praktik|student", "any_tags": ["internship"] }
+    },
+    {
+      "query": "embedded systems c++ firmware",
+      "relevant": { "title_regex": "embedded|firmware|c\\+\\+|hardware|fpga|rtos|iot", "any_tags": ["embedded", "c++"] }
+    }
+  ]
+}

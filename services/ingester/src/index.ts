@@ -4,23 +4,11 @@ import {
   CreateQueueCommand,
   SendMessageCommand,
 } from "@aws-sdk/client-sqs";
+import { detectSeniority, detectVisaSupport, stripHtml, type ArbeitnowJob } from "./classify.js";
 
 const ARBEITNOW_API = "https://www.arbeitnow.com/api/job-board-api";
 const PAGES = Number(process.env.INGEST_PAGES ?? 4);
 const INTERVAL_MS = Number(process.env.INGEST_INTERVAL_MS ?? 15 * 60 * 1000);
-
-interface ArbeitnowJob {
-  slug: string;
-  company_name: string;
-  title: string;
-  description: string;
-  remote: boolean;
-  url: string;
-  tags: string[];
-  job_types: string[];
-  location: string;
-  created_at: number; // unix seconds
-}
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const sqs = new SQSClient({ endpoint: process.env.SQS_ENDPOINT });
@@ -31,24 +19,6 @@ async function ensureQueue(): Promise<string> {
   );
   if (!res.QueueUrl) throw new Error("Could not create/resolve SQS queue");
   return res.QueueUrl;
-}
-
-function stripHtml(html: string): string {
-  return html
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function detectVisaSupport(job: ArbeitnowJob, plainDescription: string): boolean {
-  const haystack = `${job.title} ${job.tags.join(" ")} ${plainDescription}`.toLowerCase();
-  return /visa sponsorship|visa support|sponsor(s|ing)? (a |your )?visa|relocation (assistance|package|support|bonus)/.test(
-    haystack,
-  );
 }
 
 async function fetchPage(page: number): Promise<ArbeitnowJob[]> {
@@ -69,8 +39,8 @@ async function ingestOnce(queueUrl: string): Promise<void> {
     for (const job of jobs) {
       const description = stripHtml(job.description).slice(0, 8000);
       const result = await pool.query<{ id: number }>(
-        `INSERT INTO jobs (external_id, title, company, location, remote, visa_sponsorship, tags, url, description, posted_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, to_timestamp($10))
+        `INSERT INTO jobs (external_id, title, company, location, remote, visa_sponsorship, seniority, tags, url, description, posted_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, to_timestamp($11))
          ON CONFLICT (external_id) DO NOTHING
          RETURNING id`,
         [
@@ -80,7 +50,9 @@ async function ingestOnce(queueUrl: string): Promise<void> {
           job.location,
           job.remote,
           detectVisaSupport(job, description),
-          job.tags,
+          detectSeniority(job.title),
+          // Lower-cased so the skills filter can use indexed array containment (tags @> ARRAY['python']).
+          Array.from(new Set(job.tags.map((t) => t.trim().toLowerCase()).filter(Boolean))),
           job.url,
           description,
           job.created_at,
@@ -128,8 +100,52 @@ async function requeueUnindexed(queueUrl: string): Promise<void> {
   }
 }
 
+/**
+ * Derived fields get backfilled at startup so a schema change never requires
+ * re-ingesting. Rows the classifier can't place stay NULL and are re-checked
+ * next boot — cheap, and it means a better regex tomorrow applies to old rows.
+ */
+async function backfillSeniority(): Promise<void> {
+  const { rows } = await pool.query<{ id: string; title: string }>(
+    "SELECT id, title FROM jobs WHERE seniority IS NULL",
+  );
+  let updated = 0;
+  for (const row of rows) {
+    const level = detectSeniority(row.title);
+    if (!level) continue;
+    await pool.query("UPDATE jobs SET seniority = $1 WHERE id = $2", [level, Number(row.id)]);
+    updated++;
+  }
+  if (rows.length > 0) {
+    console.log(`[ingester] backfill: classified seniority for ${updated}/${rows.length} unlabelled jobs`);
+  }
+}
+
+/**
+ * Re-clean descriptions that still contain markup or entities (ingested before
+ * the double-encoding fix). Clearing the embedding hands the row back to the
+ * reconciler, which re-queues it for indexing — no special re-embed path needed.
+ */
+async function backfillDescriptions(): Promise<void> {
+  const { rows } = await pool.query<{ id: string; description: string }>(
+    String.raw`SELECT id, description FROM jobs
+               WHERE description ~ '<[a-zA-Z][^>]*>|&#?[a-zA-Z0-9]+;'`,
+  );
+  for (const row of rows) {
+    await pool.query(
+      "UPDATE jobs SET description = $1, embedding = NULL, indexed_at = NULL WHERE id = $2",
+      [stripHtml(row.description).slice(0, 8000), Number(row.id)],
+    );
+  }
+  if (rows.length > 0) {
+    console.log(`[ingester] backfill: re-cleaned ${rows.length} descriptions, queued for re-embedding`);
+  }
+}
+
 async function main(): Promise<void> {
   const queueUrl = await ensureQueue();
+  await backfillSeniority();
+  await backfillDescriptions();
   console.log(`[ingester] queue ready: ${queueUrl}, polling arbeitnow every ${INTERVAL_MS / 60000} min`);
 
   for (;;) {

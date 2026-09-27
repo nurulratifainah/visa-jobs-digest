@@ -1,0 +1,66 @@
+name: CI
+
+# Required status checks for main. Agent-authored PRs go through exactly the
+# same gate as human ones — nothing merges on an AI's word alone.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [services/api, services/ingester, services/indexer, agent, web]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [services/api, services/ingester]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    services:
+      # Real Postgres + pgvector so the BM25 SQL, trigger and filters are tested
+      # as they run in production, not against a mock.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: jobs
+          POSTGRES_PASSWORD: jobs
+          POSTGRES_DB: jobs_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U jobs -d jobs_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://jobs:jobs@localhost:5432/jobs_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+      - run: npm ci
+      - run: npm test
